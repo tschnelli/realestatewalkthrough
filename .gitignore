@@ -1,0 +1,7 @@
+out/
+*.ply
+*.mp4
+*.splat
+*.ksplat
+*.spz
+serve.log
