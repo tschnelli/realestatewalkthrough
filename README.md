@@ -14,6 +14,10 @@ Local GTX 1060 6GB is too small/awkward on Windows (CUDA extension builds). Use 
 Capture tips: walk slowly, keep the phone level, overlap views, avoid mirrors and moving people,
 good even lighting, finish where you started.
 
+### Free alternative: Colab
+Open `pipeline/colab.ipynb` in Google Colab (File -> Open notebook -> GitHub -> `tschnelli/realestatewalkthrough`),
+set the runtime to T4 GPU, and run the cells. It uses CPU COLMAP and 7000 training iterations. Untested.
+
 ## 2. Prepare for web
     npx @playcanvas/splat-transform out/export/splat.ply viewer/scene.ply   # or keep .ply as-is
 

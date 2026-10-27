@@ -7,6 +7,8 @@ set -euo pipefail
 VIDEO="${1:?usage: run.sh video.mp4 [out_dir] [num_frames]}"
 OUT="${2:-out}"
 FRAMES="${3:-250}"
+ITERS="${ITERS:-15000}"          # training iterations
+PROCESS_ARGS="${PROCESS_ARGS:-}"  # extra ns-process-data args, e.g. "--no-gpu --sfm-tool colmap"
 
 mkdir -p "$OUT"
 
@@ -14,13 +16,14 @@ mkdir -p "$OUT"
 ns-process-data video \
   --data "$VIDEO" \
   --output-dir "$OUT/data" \
-  --num-frames-target "$FRAMES"
+  --num-frames-target "$FRAMES" \
+  $PROCESS_ARGS
 
 # 2. Train Gaussian Splats.
 ns-train splatfacto \
   --data "$OUT/data" \
   --output-dir "$OUT/train" \
-  --max-num-iterations 15000 \
+  --max-num-iterations "$ITERS" \
   --viewer.quit-on-train-completion True
 
 # 3. Export a .ply splat from the latest run.
