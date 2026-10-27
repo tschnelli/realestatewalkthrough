@@ -29,3 +29,9 @@ object (door ~2.03 m), enter its length, Calibrate. Stored per scene in localSto
 ## Status
 - pipeline/run.sh: written, untested (no Linux GPU run yet)
 - viewer/index.html: written, untested against a real splat
+
+## Sample data
+- `samples/cabin-walkthrough.mov`: 56 s, 568x320 phone clip of a cabin room. Low resolution
+  (a compressed copy), so expect weak results; use a native 1080p/4K capture for real tests.
+- Sample splat for the viewer (not committed, 49 MB):
+  `curl -L -o viewer/room.splat https://huggingface.co/cakewalk/splat-data/resolve/main/room.splat`
