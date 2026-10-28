@@ -27,6 +27,9 @@ ns-train splatfacto \
   --viewer.quit-on-train-completion True
 
 # 3. Export a .ply splat from the latest run.
+# PyTorch >=2.6 defaults torch.load to weights_only=True, which rejects nerfstudio checkpoints.
+# This is our own just-trained checkpoint, so loading it fully is fine.
+export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
 CONFIG="$(ls -t "$OUT"/train/*/splatfacto/*/config.yml | head -1)"
 ns-export gaussian-splat --load-config "$CONFIG" --output-dir "$OUT/export"
 
