@@ -66,12 +66,14 @@ try {
 // ---- first-person controls -------------------------------------------------
 // Click the scene to capture the mouse (Esc releases it). Mouse looks, arrows/WASD walk,
 // Q/E down/up, Shift = fast, M toggles measuring, Backspace clears points.
-// The scene's real "up" depends on how it was exported (nerfstudio is often +Z, not -Y).
-// Press U to cycle axes until floors look flat; it is remembered per scene. Or pass ?up=0,0,1.
-const UPS = [[0, -1, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0], [1, 0, 0], [-1, 0, 0]];
-let upIdx = 0;
-try { upIdx = parseInt(localStorage.getItem('up:' + src)) || 0; } catch {}
-const up = new THREE.Vector3(...(params.get('up')?.split(',').map(Number) ?? UPS[upIdx % UPS.length]));
+// The scene's real "up" depends on how it was exported. Aim at the floor and press F to set it
+// (fits a plane to the surface under the crosshair). Remembered per scene; or pass ?up=0,0,1.
+let upInit = [0, -1, 0];
+try {   // older builds stored a plain index here, so only accept a 3-number array
+  const saved = JSON.parse(localStorage.getItem('up:' + src));
+  if (Array.isArray(saved) && saved.length === 3 && saved.every(Number.isFinite)) upInit = saved;
+} catch {}
+const up = new THREE.Vector3(...(params.get('up')?.split(',').map(Number) ?? upInit)).normalize();
 const canvas = viewer.renderer.domElement;
 const keys = new Set();
 const typing = () => /input|textarea/i.test(document.activeElement?.tagName || '');
@@ -111,17 +113,38 @@ document.addEventListener('mousemove', e => {
   pitch = THREE.MathUtils.clamp(pitch - e.movementY * 0.002, -1.45, 1.45);
 });
 
+// Fit a plane to a grid of surface points around the crosshair; its normal (facing us) becomes "up".
+function levelToFloor() {
+  if (!locked()) { readout.textContent = 'Click the scene first, aim the crosshair at the floor, then press F.'; return; }
+  const rect = canvas.getBoundingClientRect(), dims = new THREE.Vector2(rect.width, rect.height);
+  const pts = [];
+  for (let i = -2; i <= 2; i++) for (let j = -2; j <= 2; j++) {
+    const m = new THREE.Vector2(rect.width * (0.5 + i * 0.08), rect.height * (0.5 + j * 0.08));
+    viewer.raycaster.setFromCameraAndScreenPosition(viewer.camera, m, dims);
+    const h = viewer.raycaster.intersectSplatMesh(viewer.splatMesh);
+    if (h.length) pts.push(h[0].origin.clone());
+  }
+  if (pts.length < 8) { readout.textContent = 'Not enough surface under the crosshair. Aim at a clear patch of floor.'; return; }
+  const c = pts.reduce((a, p) => a.add(p), new THREE.Vector3()).multiplyScalar(1 / pts.length);
+  const C = new THREE.Matrix3(); const e = C.elements.fill(0);   // covariance (symmetric)
+  pts.forEach(p => { const d = p.clone().sub(c); const v = [d.x, d.y, d.z];
+    for (let r = 0; r < 3; r++) for (let q = 0; q < 3; q++) e[q * 3 + r] += v[r] * v[q]; });
+  const tr = e[0] + e[4] + e[8];
+  const M = new THREE.Matrix3().fromArray([tr - e[0], -e[1], -e[2], -e[3], tr - e[4], -e[5], -e[6], -e[7], tr - e[8]]);
+  let n = new THREE.Vector3(1, 1, 1).normalize();                // power iteration: smallest-variance direction
+  for (let i = 0; i < 60; i++) n.applyMatrix3(M).normalize();
+  if (n.dot(viewer.camera.position.clone().sub(c)) < 0) n.negate();   // face the camera
+  const err = Math.sqrt(pts.reduce((s2, p) => s2 + Math.pow(n.dot(p.clone().sub(c)), 2), 0) / pts.length);
+  try { localStorage.setItem('up:' + src, JSON.stringify(n.toArray())); } catch {}
+  setUp(n.toArray());
+  readout.textContent = `Level set from ${pts.length} floor points (flatness error ${err.toFixed(3)}). Press F on the floor again to redo.`;
+}
+
 addEventListener('keydown', e => {
   if (typing()) return;
   const k = e.key.toLowerCase();
   if (k === 'm') { toggleMeasure(); return; }
-  if (k === 'u') {
-    upIdx = (upIdx + 1) % UPS.length;
-    try { localStorage.setItem('up:' + src, upIdx); } catch {}
-    setUp(UPS[upIdx]);
-    readout.textContent = `Up axis: (${UPS[upIdx]}). Press U again if the floor isn't flat.`;
-    return;
-  }
+  if (k === 'f') { levelToFloor(); return; }
   if (k === 'backspace') { clearAll(); return; }
   if (k.startsWith('arrow') || 'wasdqe'.includes(k) || k === 'shift') { keys.add(k); if (k !== 'shift') e.preventDefault(); }
 });
@@ -153,7 +176,7 @@ function tick(now) {
 requestAnimationFrame(tick);
 
 // ---- measuring -------------------------------------------------------------
-const HELP = 'Click the scene to look around. Mouse = look, arrows/WASD = walk, Q/E = down/up, Shift = fast, M = measure, U = fix tilt, Esc = release mouse.';
+const HELP = 'Click the scene to look around. Mouse = look, arrows/WASD = walk, Q/E = down/up, Shift = fast, M = measure, F (aim at floor) = level, Esc = release mouse.';
 const readout = document.getElementById('readout');
 readout.textContent = HELP;
 const measureBtn = document.getElementById('measure');
