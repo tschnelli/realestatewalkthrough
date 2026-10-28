@@ -66,7 +66,12 @@ try {
 // ---- first-person controls -------------------------------------------------
 // Click the scene to capture the mouse (Esc releases it). Mouse looks, arrows/WASD walk,
 // Q/E down/up, Shift = fast, M toggles measuring, Backspace clears points.
-const up = new THREE.Vector3(0, -1, 0);   // matches cameraUp above
+// The scene's real "up" depends on how it was exported (nerfstudio is often +Z, not -Y).
+// Press U to cycle axes until floors look flat; it is remembered per scene. Or pass ?up=0,0,1.
+const UPS = [[0, -1, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0], [1, 0, 0], [-1, 0, 0]];
+let upIdx = 0;
+try { upIdx = parseInt(localStorage.getItem('up:' + src)) || 0; } catch {}
+const up = new THREE.Vector3(...(params.get('up')?.split(',').map(Number) ?? UPS[upIdx % UPS.length]));
 const canvas = viewer.renderer.domElement;
 const keys = new Set();
 const typing = () => /input|textarea/i.test(document.activeElement?.tagName || '');
@@ -75,8 +80,16 @@ let yaw = 0, pitch = 0;
 const F0 = new THREE.Vector3(), R0 = new THREE.Vector3();
 const fwd = new THREE.Vector3(), right = new THREE.Vector3(), move = new THREE.Vector3(), dir = new THREE.Vector3();
 let ready = false;
+const dbg = params.has('debug') ? Object.assign(document.body.appendChild(document.createElement('div')), { style: 'position:fixed;bottom:8px;left:8px;z-index:6;font:12px monospace;background:#000a;padding:4px 8px;border-radius:4px' }) : null;
+
+function setUp(v) {
+  up.set(...v);
+  viewer.camera.up.copy(up);
+  initLook();
+}
 
 function initLook() {   // take the starting heading from wherever the camera currently points
+  viewer.camera.up.copy(up);
   viewer.camera.getWorldDirection(dir);
   pitch = Math.asin(THREE.MathUtils.clamp(dir.dot(up), -1, 1));
   F0.copy(dir).addScaledVector(up, -dir.dot(up));
@@ -84,7 +97,8 @@ function initLook() {   // take the starting heading from wherever the camera cu
   F0.normalize();
   R0.crossVectors(F0, up).normalize();
   yaw = 0; ready = true;
-  viewer.controls.enabled = false;   // orbit controls off: the mouse is a first-person look now
+  viewer.controls.enabled = false;        // orbit controls off: the mouse is a first-person look now
+  viewer.controls.update = () => false;   // and never let them re-clamp or re-aim the camera
 }
 
 canvas.addEventListener('click', () => { if (!locked()) { if (!ready) initLook(); canvas.requestPointerLock(); } });
@@ -101,6 +115,13 @@ addEventListener('keydown', e => {
   if (typing()) return;
   const k = e.key.toLowerCase();
   if (k === 'm') { toggleMeasure(); return; }
+  if (k === 'u') {
+    upIdx = (upIdx + 1) % UPS.length;
+    try { localStorage.setItem('up:' + src, upIdx); } catch {}
+    setUp(UPS[upIdx]);
+    readout.textContent = `Up axis: (${UPS[upIdx]}). Press U again if the floor isn't flat.`;
+    return;
+  }
   if (k === 'backspace') { clearAll(); return; }
   if (k.startsWith('arrow') || 'wasdqe'.includes(k) || k === 'shift') { keys.add(k); if (k !== 'shift') e.preventDefault(); }
 });
@@ -125,13 +146,14 @@ function tick(now) {
     dir.copy(fwd).multiplyScalar(Math.cos(pitch)).addScaledVector(up, Math.sin(pitch));
     viewer.controls.target.copy(viewer.camera.position).add(dir);   // keep the (disabled) orbit controls from fighting us
     viewer.camera.lookAt(viewer.controls.target);
+    if (dbg) dbg.textContent = `up=${up.toArray()} locked=${locked()} yaw=${yaw.toFixed(2)} pitch=${pitch.toFixed(2)} pos=${viewer.camera.position.toArray().map(v => v.toFixed(2))}`;
   }
   requestAnimationFrame(tick);
 }
 requestAnimationFrame(tick);
 
 // ---- measuring -------------------------------------------------------------
-const HELP = 'Click the scene to look around. Mouse = look, arrows/WASD = walk, Q/E = down/up, Shift = fast, M = measure, Esc = release mouse.';
+const HELP = 'Click the scene to look around. Mouse = look, arrows/WASD = walk, Q/E = down/up, Shift = fast, M = measure, U = fix tilt, Esc = release mouse.';
 const readout = document.getElementById('readout');
 readout.textContent = HELP;
 const measureBtn = document.getElementById('measure');
