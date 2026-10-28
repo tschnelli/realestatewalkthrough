@@ -15,6 +15,8 @@
   #hint { color:#9aa3b5; margin-top:6px; font-size:12px; }
   input { width:70px; background:#0f1115; color:var(--fg); border:1px solid #333a48; border-radius:5px; padding:5px; }
   .dot { position:fixed; width:10px; height:10px; margin:-5px 0 0 -5px; border-radius:50%; background:var(--accent); border:2px solid #fff; pointer-events:none; z-index:4; }
+  #cross { position:fixed; left:50%; top:50%; width:14px; height:14px; margin:-7px 0 0 -7px; display:none; pointer-events:none; z-index:4;
+           background:linear-gradient(#fff,#fff) center/2px 100% no-repeat, linear-gradient(#fff,#fff) center/100% 2px no-repeat; mix-blend-mode:difference; }
   #err { position:fixed; inset:0; display:none; place-items:center; text-align:center; padding:24px; }
 </style>
 <script type="importmap">
@@ -29,12 +31,13 @@
   <h1>Splat Tour</h1>
   <button id="measure" class="off">Measure</button>
   <button id="reset" class="off">Clear</button>
-  <div id="readout">Orbit with drag, zoom with wheel. Arrows/WASD walk, Q/E down/up, Shift = fast.</div>
+  <div id="readout"></div>
   <div id="hint">Units are scene units until calibrated. Measure something you know (a door, 2.03 m), enter its real length, press Calibrate.</div>
   <div style="margin-top:8px">
     <input id="known" type="number" step="0.01" placeholder="metres"> <button id="calibrate" class="off">Calibrate</button>
   </div>
 </div>
+<div id="cross"></div>
 <div id="err">Add <code>?src=scene.ply</code> (or .splat / .ksplat / .spz) to the URL.</div>
 
 <script type="module">
@@ -60,49 +63,77 @@ try {
   document.getElementById('err').style.display = 'grid';
 }
 
-// ---- keyboard movement -----------------------------------------------------
-// Arrows / WASD: walk forward, back, strafe. Q/E: down/up. Shift: faster.
-// Moves camera and orbit target together so orbiting still works afterwards.
+// ---- first-person controls -------------------------------------------------
+// Click the scene to capture the mouse (Esc releases it). Mouse looks, arrows/WASD walk,
+// Q/E down/up, Shift = fast, M toggles measuring, Backspace clears points.
+const up = new THREE.Vector3(0, -1, 0);   // matches cameraUp above
+const canvas = viewer.renderer.domElement;
 const keys = new Set();
 const typing = () => /input|textarea/i.test(document.activeElement?.tagName || '');
+const locked = () => document.pointerLockElement === canvas;
+let yaw = 0, pitch = 0;
+const F0 = new THREE.Vector3(), R0 = new THREE.Vector3();
+const fwd = new THREE.Vector3(), right = new THREE.Vector3(), move = new THREE.Vector3(), dir = new THREE.Vector3();
+let ready = false;
+
+function initLook() {   // take the starting heading from wherever the camera currently points
+  viewer.camera.getWorldDirection(dir);
+  pitch = Math.asin(THREE.MathUtils.clamp(dir.dot(up), -1, 1));
+  F0.copy(dir).addScaledVector(up, -dir.dot(up));
+  if (F0.lengthSq() < 1e-6) F0.set(0, 0, -1);
+  F0.normalize();
+  R0.crossVectors(F0, up).normalize();
+  yaw = 0; ready = true;
+  viewer.controls.enabled = false;   // orbit controls off: the mouse is a first-person look now
+}
+
+canvas.addEventListener('click', () => { if (!locked()) { if (!ready) initLook(); canvas.requestPointerLock(); } });
+document.addEventListener('pointerlockchange', () => {
+  document.getElementById('cross').style.display = locked() ? 'block' : 'none';
+});
+document.addEventListener('mousemove', e => {
+  if (!locked()) return;
+  yaw += e.movementX * 0.002;
+  pitch = THREE.MathUtils.clamp(pitch - e.movementY * 0.002, -1.45, 1.45);
+});
+
 addEventListener('keydown', e => {
   if (typing()) return;
   const k = e.key.toLowerCase();
-  if (k.startsWith('arrow') || 'wasdqe'.includes(k)) { keys.add(k); e.preventDefault(); }
+  if (k === 'm') { toggleMeasure(); return; }
+  if (k === 'backspace') { clearAll(); return; }
+  if (k.startsWith('arrow') || 'wasdqe'.includes(k) || k === 'shift') { keys.add(k); if (k !== 'shift') e.preventDefault(); }
 });
 addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
 addEventListener('blur', () => keys.clear());
 
-const up = new THREE.Vector3(0, -1, 0);   // matches cameraUp above
-const fwd = new THREE.Vector3(), right = new THREE.Vector3(), move = new THREE.Vector3();
 let last = performance.now();
 function tick(now) {
   const dt = Math.min((now - last) / 1000, 0.1); last = now;
-  if (keys.size && viewer.camera && viewer.controls) {
-    const speed = (keys.has('shift') ? 3 : 1) * 1.2 * dt;   // scene units / second
-    viewer.camera.getWorldDirection(fwd);
-    fwd.addScaledVector(up, -fwd.dot(up)).normalize();       // flatten to the floor plane
+  if (ready && viewer.camera && viewer.controls) {
+    fwd.copy(F0).multiplyScalar(Math.cos(yaw)).addScaledVector(R0, Math.sin(yaw));   // heading on the floor plane
     right.crossVectors(fwd, up).normalize();
-    move.set(0, 0, 0);
     const has = (...n) => n.some(x => keys.has(x));
+    move.set(0, 0, 0);
     if (has('arrowup', 'w')) move.add(fwd);
     if (has('arrowdown', 's')) move.sub(fwd);
-    if (has('arrowright', 'd')) move.sub(right);
-    if (has('arrowleft', 'a')) move.add(right);
+    if (has('arrowright', 'd')) move.add(right);
+    if (has('arrowleft', 'a')) move.sub(right);
     if (has('e')) move.sub(up);
     if (has('q')) move.add(up);
-    if (move.lengthSq()) {
-      move.normalize().multiplyScalar(speed);
-      viewer.camera.position.add(move);
-      viewer.controls.target.add(move);
-    }
+    if (move.lengthSq()) viewer.camera.position.addScaledVector(move.normalize(), (keys.has('shift') ? 3 : 1) * 1.2 * dt);
+    dir.copy(fwd).multiplyScalar(Math.cos(pitch)).addScaledVector(up, Math.sin(pitch));
+    viewer.controls.target.copy(viewer.camera.position).add(dir);   // keep the (disabled) orbit controls from fighting us
+    viewer.camera.lookAt(viewer.controls.target);
   }
   requestAnimationFrame(tick);
 }
 requestAnimationFrame(tick);
 
 // ---- measuring -------------------------------------------------------------
+const HELP = 'Click the scene to look around. Mouse = look, arrows/WASD = walk, Q/E = down/up, Shift = fast, M = measure, Esc = release mouse.';
 const readout = document.getElementById('readout');
+readout.textContent = HELP;
 const measureBtn = document.getElementById('measure');
 let measuring = false;
 let points = [];   // world-space THREE.Vector3
@@ -112,7 +143,7 @@ const fmt = d => scale === 1 ? `${d.toFixed(3)} units` : `${(d * scale).toFixed(
 
 function clearAll() {
   points = []; dots.forEach(d => d.el.remove()); dots = [];
-  readout.textContent = measuring ? 'Click two points.' : 'Orbit with drag, zoom with wheel.';
+  readout.textContent = measuring ? 'Aim the crosshair and click two points.' : HELP;
 }
 
 function updateDots() {
@@ -128,37 +159,34 @@ function updateDots() {
 }
 requestAnimationFrame(updateDots);
 
-function pick(ev) {
-  const rect = viewer.renderer.domElement.getBoundingClientRect();
-  const mouse = new THREE.Vector2(ev.clientX - rect.left, ev.clientY - rect.top);
+function pick() {   // surface under the crosshair (screen centre)
+  const rect = canvas.getBoundingClientRect();
+  const mouse = new THREE.Vector2(rect.width / 2, rect.height / 2);
   const dims = new THREE.Vector2(rect.width, rect.height);
   viewer.raycaster.setFromCameraAndScreenPosition(viewer.camera, mouse, dims);
   const hits = viewer.raycaster.intersectSplatMesh(viewer.splatMesh);
   return hits.length ? hits[0].origin.clone() : null;
 }
 
-// Distinguish click from orbit-drag.
-let down = null;
-addEventListener('pointerdown', e => { down = [e.clientX, e.clientY]; });
-addEventListener('pointerup', e => {
-  if (!measuring || !down || e.target.closest('#panel')) return;
-  if (Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4) return;
-  const hit = pick(e);
-  if (!hit) { readout.textContent = 'No surface under cursor, try again.'; return; }
+canvas.addEventListener('click', () => {
+  if (!measuring || !locked()) return;
+  const hit = pick();
+  if (!hit) { readout.textContent = 'No surface under the crosshair, try again.'; return; }
   if (points.length >= 2) clearAll();
   points.push(hit);
   const el = Object.assign(document.createElement('div'), { className: 'dot' });
   document.body.appendChild(el);
   dots.push({ el, world: hit });
-  readout.textContent = points.length === 1 ? 'Click the second point.' : fmt(points[0].distanceTo(points[1]));
+  readout.textContent = points.length === 1 ? 'Aim at the second point and click.' : fmt(points[0].distanceTo(points[1]));
 });
 
-measureBtn.onclick = () => {
+function toggleMeasure() {
   measuring = !measuring;
   measureBtn.classList.toggle('off', !measuring);
   measureBtn.textContent = measuring ? 'Measuring…' : 'Measure';
   clearAll();
-};
+}
+measureBtn.onclick = toggleMeasure;
 document.getElementById('reset').onclick = clearAll;
 
 document.getElementById('calibrate').onclick = () => {
